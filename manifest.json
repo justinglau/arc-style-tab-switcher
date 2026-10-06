@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Arc-Style Tab Switcher",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "MRU tab switching with a visual overlay, just like Arc browser",
-  "permissions": ["tabs", "activeTab", "scripting", "favicon"],
+  "permissions": ["tabs", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
   "commands": {
     "switch-tab": {
       "suggested_key": {
@@ -16,6 +17,16 @@
   "background": {
     "service_worker": "background.js"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ],
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

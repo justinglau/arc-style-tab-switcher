@@ -1,296 +1,378 @@
-(() => {
-  if (window.__arcTabSwitcherInjected) return;
-  window.__arcTabSwitcherInjected = true;
+// Arc-Style Tab Switcher - page script (v2.1)
+//
+// Runs in every page at all times so it already knows whether Ctrl is held
+// when the shortcut fires. This removes the race that caused quick taps to
+// open the strip instead of toggling tabs.
 
+(() => {
+  const MSG_TAG = "__arcTabSwitcher";
+  const TEARDOWN_EVT = "__arcTabSwitcherTeardown";
+  const HOLD_MS = 300;
+  const NAV_KEYS = new Set(["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown", "Tab", "Enter", "Escape"]);
+  const instanceId = Math.random().toString(36).slice(2);
+
+  const isTop = window.top === window;
+
+  function alive() {
+    try { return !!(chrome.runtime && chrome.runtime.id); } catch { return false; }
+  }
+
+  function isModifier(key) {
+    return key === "Control" || key === "Alt" || key === "Meta";
+  }
+
+  function modsHeld(e) {
+    return !!(e.ctrlKey || e.altKey || e.metaKey);
+  }
+
+  // Remove any older copy of this script (e.g. after an extension update)
+  document.dispatchEvent(new CustomEvent(TEARDOWN_EVT, { detail: instanceId }));
+
+  // ════════════════════════════════════════════════════════════
+  // Sub-frames: only forward key state to the top page
+  // ════════════════════════════════════════════════════════════
+  if (!isTop) {
+    function forward(e) {
+      if (!alive()) return teardownFrame();
+      const mod = modsHeld(e);
+      const relevant = isModifier(e.key) || (mod && NAV_KEYS.has(e.key));
+      if (!relevant) return;
+      try {
+        window.top.postMessage(
+          { [MSG_TAG]: 1, mod, key: e.type === "keydown" && !isModifier(e.key) ? e.key : null, shift: e.shiftKey },
+          "*"
+        );
+      } catch {}
+    }
+    function teardownFrame(evt) {
+      if (evt && evt.detail === instanceId) return;
+      window.removeEventListener("keydown", forward, true);
+      window.removeEventListener("keyup", forward, true);
+      document.removeEventListener(TEARDOWN_EVT, teardownFrame);
+    }
+    window.addEventListener("keydown", forward, true);
+    window.addEventListener("keyup", forward, true);
+    document.addEventListener(TEARDOWN_EVT, teardownFrame);
+    return;
+  }
+
+  // ════════════════════════════════════════════════════════════
+  // Top page: tracking + switcher
+  // ════════════════════════════════════════════════════════════
+
+  let modHeld = false;     // is Ctrl/Option/Cmd currently down
+  let active = false;      // switcher session in progress
+  let quickTabId = null;   // previous tab, known before the full list arrives
+  let tabs = null;         // full MRU list (arrives a moment later)
+  let selected = 1;
+  let holdTimer = null;
+  let holdElapsed = false;
+  let mouseArmed = false;  // hover only selects after a real mouse movement
   let overlay = null;
-  let selectedIndex = 1;
-  let tabList = [];
-  let overlayVisible = false;
-  let showOverlayTimer = null;
-  const HOLD_THRESHOLD = 300; // ms — overlay appears after this
+  let cards = [];
+  let labelEl = null;
+  let restoreFocusTo = null;
 
   // ─── Helpers ───
 
-  function getDomainFromUrl(url) {
-    try { return new URL(url).hostname.replace("www.", ""); }
-    catch { return ""; }
+  function el(tag, cls) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    return n;
   }
 
-  function truncate(str, len) {
-    return str.length <= len ? str : str.slice(0, len) + "…";
+  function domainOf(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
   }
 
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  function getEmojiForDomain(url) {
-    const d = getDomainFromUrl(url);
+  function emojiFor(url) {
+    const d = domainOf(url);
     if (d.includes("github")) return "🐙";
-    if (d.includes("google") && !d.includes("mail") && !d.includes("calendar")) return "🔍";
     if (d.includes("youtube")) return "▶️";
     if (d.includes("slack")) return "💬";
     if (d.includes("twitter") || d.includes("x.com")) return "🐦";
-    if (d.includes("reddit")) return "🤖";
-    if (d.includes("stackoverflow")) return "📚";
     if (d.includes("notion")) return "📝";
     if (d.includes("figma")) return "🎨";
     if (d.includes("linkedin")) return "💼";
     if (d.includes("mail") || d.includes("superhuman")) return "📧";
     if (d.includes("calendar")) return "📅";
-    if (d.includes("espn")) return "🏈";
-    if (d.includes("claude") || d.includes("anthropic")) return "🤖";
+    if (d.includes("google")) return "🔍";
     return "🌐";
   }
 
-  function accentBackground(color) {
-    if (!color) return "linear-gradient(145deg, rgba(70, 70, 90, 0.5), rgba(40, 40, 55, 0.7))";
-    // Color is now HSL string like "hsl(200, 55%, 45%)"
-    // Create a gradient using it at different opacities
-    return `linear-gradient(145deg, ${color.replace(")", ", 0.35)")}, ${color.replace(")", ", 0.55)")})`.replace("hsl(", "hsla(").replace("hsl(", "hsla(");
+  function accent(hue) {
+    if (hue == null) return "linear-gradient(145deg, rgba(70, 70, 90, 0.5), rgba(40, 40, 55, 0.7))";
+    return `linear-gradient(145deg, hsla(${hue}, 55%, 45%, 0.35), hsla(${hue}, 55%, 35%, 0.55))`;
   }
 
-  // ─── Overlay Creation ───
-
-  function createOverlay() {
-    if (overlay) overlay.remove();
-
-    overlay = document.createElement("div");
-    overlay.id = "__arc-tab-switcher-overlay";
-    overlay.innerHTML = `
-      <div class="__arc-switcher-backdrop"></div>
-      <div class="__arc-switcher-panel">
-        <div class="__arc-switcher-list"></div>
-        <div class="__arc-switcher-selected-label"></div>
-      </div>
-    `;
-
-    document.documentElement.appendChild(overlay);
-    overlayVisible = true;
-    renderList();
-
-    overlay.querySelector(".__arc-switcher-backdrop")
-      .addEventListener("click", () => removeOverlay());
+  function icon(tab, emojiCls) {
+    const fallback = () => {
+      const s = el("span", emojiCls);
+      s.textContent = emojiFor(tab.url);
+      return s;
+    };
+    if (!tab.favIconUrl) return fallback();
+    const img = el("img");
+    img.alt = "";
+    img.addEventListener("error", () => img.replaceWith(fallback()), { once: true });
+    img.src = tab.favIconUrl;
+    return img;
   }
 
-  function renderList() {
-    if (!overlay) return;
-    const listEl = overlay.querySelector(".__arc-switcher-list");
-    const labelEl = overlay.querySelector(".__arc-switcher-selected-label");
-    listEl.innerHTML = "";
+  // ─── Overlay ───
 
-    tabList.forEach((tab, i) => {
-      const item = document.createElement("div");
-      item.className = "__arc-switcher-item" +
-        (i === selectedIndex ? " __arc-switcher-item--selected" : "");
+  function buildCard(tab, i) {
+    const card = el("div", "__arc-switcher-item");
+    const wrap = el("div", "__arc-switcher-thumb-wrap");
 
-      const domain = getDomainFromUrl(tab.url);
-      let thumbContent;
-      let faviconBadge = "";
-
-      if (tab.thumbnail) {
-        thumbContent = `<img class="__arc-switcher-thumb" src="${tab.thumbnail}" />`;
-        if (tab.favIconUrl) {
-          faviconBadge = `<div class="__arc-switcher-favicon-badge"><img src="${escapeHtml(tab.favIconUrl)}" onerror="this.parentElement.innerHTML='<span class=\\'__arc-switcher-favicon-badge-emoji\\'>${getEmojiForDomain(tab.url)}</span>'" /></div>`;
-        } else {
-          faviconBadge = `<div class="__arc-switcher-favicon-badge"><span class="__arc-switcher-favicon-badge-emoji">${getEmojiForDomain(tab.url)}</span></div>`;
-        }
-      } else {
-        const bg = accentBackground(tab.accentColor);
-        if (tab.favIconUrl) {
-          thumbContent = `<div class="__arc-switcher-thumb-favicon" style="background: ${bg}"><img src="${escapeHtml(tab.favIconUrl)}" onerror="this.outerHTML='<span class=\\'__arc-switcher-thumb-favicon-emoji\\'>${getEmojiForDomain(tab.url)}</span>'" /></div>`;
-        } else {
-          thumbContent = `<div class="__arc-switcher-thumb-favicon" style="background: ${bg}"><span class="__arc-switcher-thumb-favicon-emoji">${getEmojiForDomain(tab.url)}</span></div>`;
-        }
-      }
-
-      const currentBadge = i === 0 ? `<div class="__arc-switcher-current-badge">current</div>` : "";
-
-      item.innerHTML = `
-        ${faviconBadge}
-        ${currentBadge}
-        <div class="__arc-switcher-thumb-wrap">
-          ${thumbContent}
-        </div>
-        <div class="__arc-switcher-item-info">
-          <div class="__arc-switcher-item-title">${escapeHtml(truncate(tab.title, 45))}</div>
-          <div class="__arc-switcher-item-url">${escapeHtml(domain)}</div>
-        </div>
-      `;
-
-      item.addEventListener("click", () => switchToTab(tabList[i].id));
-      item.addEventListener("mouseenter", () => { selectedIndex = i; renderList(); });
-      listEl.appendChild(item);
-    });
-
-    if (tabList[selectedIndex]) {
-      labelEl.textContent = tabList[selectedIndex].title;
-    }
-
-    const selected = listEl.querySelector(".__arc-switcher-item--selected");
-    if (selected) {
-      selected.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
-    }
-  }
-
-  // ─── Core Logic ───
-  //
-  // 1. Command fires → start listening, start timer (300ms)
-  // 2. If ALL modifiers release BEFORE timer → quick switch (instant, no overlay)
-  // 3. If timer fires while modifier still held → show overlay
-  // 4. Once overlay is visible, arrow keys / Tab navigate
-  // 5. Releasing all modifiers → switch to selected tab
-
-  function startSwitcher(tabs, currentTabId, qsTabId) {
-    tabList = tabs;
-    selectedIndex = tabs.length > 1 ? 1 : 0;
-
-    document.addEventListener("keydown", handleKeyDown, true);
-    document.addEventListener("keyup", handleKeyUp, true);
-
-    // Start timer — if modifier still held after threshold, show overlay
-    showOverlayTimer = setTimeout(() => {
-      showOverlayTimer = null;
-      // Only show if we haven't already cleaned up (quick switch)
-      if (tabList.length > 0 && !overlayVisible) {
-        createOverlay();
-      }
-    }, HOLD_THRESHOLD);
-  }
-
-  function advanceSelection() {
-    selectedIndex = (selectedIndex + 1) % tabList.length;
-    // User tapped Tab again — they want the overlay, show it immediately
-    if (!overlayVisible) {
-      clearTimeout(showOverlayTimer);
-      showOverlayTimer = null;
-      createOverlay();
+    if (tab.thumbnail) {
+      const img = el("img", "__arc-switcher-thumb");
+      img.alt = "";
+      img.src = tab.thumbnail;
+      wrap.append(img);
+      const badge = el("div", "__arc-switcher-favicon-badge");
+      badge.append(icon(tab, "__arc-switcher-favicon-badge-emoji"));
+      card.append(badge);
     } else {
-      renderList();
+      const box = el("div", "__arc-switcher-thumb-favicon");
+      box.style.background = accent(tab.hue);
+      box.append(icon(tab, "__arc-switcher-thumb-favicon-emoji"));
+      wrap.append(box);
     }
-  }
 
-  function switchToTab(tabId) {
-    chrome.runtime.sendMessage({ type: "SWITCH_TO_TAB", tabId }, () => {
-      removeOverlay();
+    if (i === 0) {
+      const b = el("div", "__arc-switcher-current-badge");
+      b.textContent = "current";
+      card.append(b);
+    }
+
+    const info = el("div", "__arc-switcher-item-info");
+    const title = el("div", "__arc-switcher-item-title");
+    title.textContent = tab.title;
+    const url = el("div", "__arc-switcher-item-url");
+    url.textContent = domainOf(tab.url);
+    info.append(title, url);
+    card.append(wrap, info);
+
+    card.addEventListener("mouseenter", () => {
+      if (!mouseArmed || !active) return;
+      selected = i;
+      updateSelection(false);
     });
+    card.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      selected = i;
+      commit();
+    });
+    return card;
   }
 
-  function removeOverlay() {
-    if (showOverlayTimer) {
-      clearTimeout(showOverlayTimer);
-      showOverlayTimer = null;
+  function showOverlay() {
+    if (overlay || !tabs || !tabs.length) return;
+    if (selected >= tabs.length) selected = selected % tabs.length;
+
+    overlay = el("div");
+    overlay.id = "__arc-tab-switcher-overlay";
+
+    const backdrop = el("div", "__arc-switcher-backdrop");
+    backdrop.addEventListener("mousedown", (e) => { e.preventDefault(); end(); });
+
+    const panel = el("div", "__arc-switcher-panel");
+    panel.tabIndex = -1;
+    const list = el("div", "__arc-switcher-list");
+    labelEl = el("div", "__arc-switcher-selected-label");
+
+    cards = tabs.map(buildCard);
+    list.append(...cards);
+    panel.append(list, labelEl);
+    overlay.append(backdrop, panel);
+    (document.documentElement || document.body).appendChild(overlay);
+
+    // If focus is inside an iframe (Google Docs, Gmail compose, etc.),
+    // pull it to this page so arrow keys and the Ctrl release land here
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === "IFRAME" || ae.tagName === "FRAME")) {
+      restoreFocusTo = ae;
+      panel.focus({ preventScroll: true });
     }
+
+    updateSelection(true);
+  }
+
+  // Only toggles classes; never rebuilds the strip
+  function updateSelection(scroll) {
+    cards.forEach((c, i) => c.classList.toggle("__arc-switcher-item--selected", i === selected));
+    if (labelEl && tabs && tabs[selected]) labelEl.textContent = tabs[selected].title;
+    if (scroll && cards[selected]) {
+      cards[selected].scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
+    }
+  }
+
+  // ─── Session ───
+
+  function start(qid) {
+    active = true;
+    quickTabId = qid;
+    tabs = null;
+    selected = 1;
+    holdElapsed = false;
+    mouseArmed = false;
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      holdElapsed = true;
+      if (active) showOverlay();
+    }, HOLD_MS);
+  }
+
+  function forceShow() {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    holdElapsed = true;
+    showOverlay();
+  }
+
+  function move(delta) {
+    if (tabs && tabs.length) {
+      const n = tabs.length;
+      selected = (((selected + delta) % n) + n) % n;
+    } else {
+      selected = Math.max(0, selected + delta);
+    }
+    if (overlay) updateSelection(true);
+    else forceShow();
+  }
+
+  function commit() {
+    if (!active) return;
+    const target = tabs && tabs[selected] ? tabs[selected].id : quickTabId;
+    end(false);
+    if (target != null && alive()) {
+      chrome.runtime.sendMessage({ type: "SWITCH_TO_TAB", tabId: target }).catch(() => {});
+    }
+  }
+
+  function end(restoreFocus = true) {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
     if (overlay) { overlay.remove(); overlay = null; }
-    overlayVisible = false;
-    tabList = [];
-    document.removeEventListener("keydown", handleKeyDown, true);
-    document.removeEventListener("keyup", handleKeyUp, true);
-    window.__arcTabSwitcherInjected = false;
+    if (restoreFocus && restoreFocusTo) {
+      try { restoreFocusTo.focus({ preventScroll: true }); } catch {}
+    }
+    restoreFocusTo = null;
+    cards = [];
+    labelEl = null;
+    tabs = null;
+    active = false;
+    holdElapsed = false;
+    mouseArmed = false;
   }
 
-  // ─── Keyboard Handling ───
+  // ─── Input handling ───
 
-  function isModifierKey(key) {
-    return key === "Control" || key === "Alt" || key === "Meta";
-  }
-
-  function handleKeyDown(e) {
-    if (!tabList.length) return;
-    const key = e.key;
-    if (isModifierKey(key)) return;
-
-    e.stopPropagation();
-    e.preventDefault();
-
+  function handleNav(key, shift) {
     switch (key) {
       case "ArrowRight":
-      case "ArrowDown":
-        selectedIndex = (selectedIndex + 1) % tabList.length;
-        if (!overlayVisible) {
-          clearTimeout(showOverlayTimer);
-          showOverlayTimer = null;
-          createOverlay();
-        } else {
-          renderList();
-        }
-        break;
-
+      case "ArrowDown": move(1); return true;
       case "ArrowLeft":
-      case "ArrowUp":
-        selectedIndex = (selectedIndex - 1 + tabList.length) % tabList.length;
-        if (!overlayVisible) {
-          clearTimeout(showOverlayTimer);
-          showOverlayTimer = null;
-          createOverlay();
-        } else {
-          renderList();
-        }
-        break;
+      case "ArrowUp": move(-1); return true;
+      case "Tab": move(shift ? -1 : 1); return true;
+      case "Enter": commit(); return true;
+      case "Escape": end(); return true;
+    }
+    return false;
+  }
 
-      case "Tab":
-        if (e.shiftKey) {
-          selectedIndex = (selectedIndex - 1 + tabList.length) % tabList.length;
-        } else {
-          selectedIndex = (selectedIndex + 1) % tabList.length;
-        }
-        if (!overlayVisible) {
-          clearTimeout(showOverlayTimer);
-          showOverlayTimer = null;
-          createOverlay();
-        } else {
-          renderList();
-        }
-        break;
-
-      case "Enter":
-        switchToTab(tabList[selectedIndex].id);
-        break;
-
-      case "Escape":
-        removeOverlay();
-        break;
+  function onKeyDown(e) {
+    if (!alive()) return teardown();
+    modHeld = modsHeld(e);
+    if (!active || isModifier(e.key)) return;
+    if (handleNav(e.key, e.shiftKey)) {
+      e.preventDefault();
+      e.stopPropagation();
     }
   }
 
-  function handleKeyUp(e) {
-    if (!tabList.length) return;
-    if (!isModifierKey(e.key)) return;
-
-    const anyModifierStillHeld = e.ctrlKey || e.altKey || e.metaKey;
-    if (anyModifierStillHeld) return;
-
-    // ALL modifiers released
-    e.stopPropagation();
-    e.preventDefault();
-
-    // If timer is still pending, this is a quick release → instant switch
-    if (showOverlayTimer) {
-      clearTimeout(showOverlayTimer);
-      showOverlayTimer = null;
-    }
-
-    // Switch to selected tab (index 1 = previous tab for quick switch)
-    if (tabList.length > 0 && tabList[selectedIndex]) {
-      switchToTab(tabList[selectedIndex].id);
-    } else {
-      removeOverlay();
+  function onKeyUp(e) {
+    if (!alive()) return teardown();
+    modHeld = modsHeld(e);
+    if (active && isModifier(e.key) && !modHeld) {
+      e.preventDefault();
+      e.stopPropagation();
+      commit();
     }
   }
 
-  // ─── Message Listener ───
+  // Key state forwarded from iframes on this page
+  function onFrameMessage(e) {
+    const d = e.data;
+    if (!d || d[MSG_TAG] !== 1 || e.source === window) return;
+    modHeld = !!d.mod;
+    if (!active) return;
+    if (d.key) handleNav(d.key, !!d.shift);
+    else if (!modHeld) commit();
+  }
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === "SHOW_SWITCHER") {
-      startSwitcher(message.tabs, message.currentTabId, message.quickSwitchTabId);
-      sendResponse({ ok: true });
-    } else if (message.type === "PING_OVERLAY") {
-      sendResponse({ showing: overlayVisible || tabList.length > 0 });
-    } else if (message.type === "ADVANCE_SELECTION") {
-      advanceSelection();
-      sendResponse({ ok: true });
+  function onMouseMove(e) {
+    if (!active) return;
+    // Safety net: if Ctrl was released without us seeing it, close the strip
+    if (!modsHeld(e)) { end(); return; }
+    if (e.movementX || e.movementY) mouseArmed = true;
+  }
+
+  function onBlur() {
+    // Focus moving into an iframe on this page also fires blur; ignore that
+    setTimeout(() => {
+      if (document.hasFocus()) return;
+      modHeld = false;
+      if (active) end();
+    }, 0);
+  }
+
+  function onVisibility() {
+    if (document.visibilityState === "hidden") {
+      modHeld = false;
+      if (active) end(false);
     }
-  });
+  }
+
+  function onMessage(msg, sender, sendResponse) {
+    if (!msg) return;
+    if (msg.type === "TRIGGER") {
+      if (active) {
+        move(1); // Tab tapped again while holding Ctrl
+        sendResponse({ mode: "advanced" });
+      } else if (!modHeld) {
+        sendResponse({ mode: "quick" }); // Ctrl already released: instant toggle
+      } else {
+        start(msg.quickTabId);
+        sendResponse({ mode: "needList" });
+      }
+    } else if (msg.type === "TAB_LIST") {
+      if (!active || !Array.isArray(msg.tabs) || msg.tabs.length < 2) return;
+      tabs = msg.tabs;
+      if (selected >= tabs.length) selected = selected % tabs.length;
+      if (holdElapsed) showOverlay();
+    }
+  }
+
+  function teardown(evt) {
+    if (evt && evt.detail === instanceId) return;
+    end(false);
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("keyup", onKeyUp, true);
+    window.removeEventListener("message", onFrameMessage);
+    window.removeEventListener("mousemove", onMouseMove, true);
+    window.removeEventListener("blur", onBlur);
+    document.removeEventListener("visibilitychange", onVisibility);
+    document.removeEventListener(TEARDOWN_EVT, teardown);
+    try { chrome.runtime.onMessage.removeListener(onMessage); } catch {}
+  }
+
+  window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("keyup", onKeyUp, true);
+  window.addEventListener("message", onFrameMessage);
+  window.addEventListener("mousemove", onMouseMove, { capture: true, passive: true });
+  window.addEventListener("blur", onBlur);
+  document.addEventListener("visibilitychange", onVisibility);
+  document.addEventListener(TEARDOWN_EVT, teardown);
+  chrome.runtime.onMessage.addListener(onMessage);
 })();

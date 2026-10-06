@@ -1,55 +1,60 @@
 # Arc-Style Tab Switcher for Chrome
 
-Bring Arc tab toggling to Chrome — a keyboard-driven, most-recently-used (MRU) tab switcher with a visual overlay showing tab previews.
+Bring Arc tab toggling to Chrome: a keyboard-driven, most-recently-used (MRU) tab switcher with a visual overlay showing tab previews.
 
-Chrome's built-in Ctrl+Tab cycles tabs left-to-right by position. This extension switches tabs by **recency** — the tab you were just on is always one keystroke away.
+Chrome's built-in Ctrl+Tab cycles tabs left-to-right by position. This extension switches tabs by **recency**, so the tab you were just on is always one keystroke away.
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome_Web_Store-Install-blue?logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/arc-style-tab-switcher/bdfjigibgpkjgmpmgccdkkmigbdcpacl)
+
 ---
 
 ## How It Works
 
-**Quick switch** — Tap `Ctrl+Tab` and release. Instantly jumps to your previous tab. Tap again to jump back. Just like Alt+Tab between two windows.
+**Quick switch:** Tap `Ctrl+Tab` and release. Instantly jumps to your previous tab. Tap again to jump back, just like Alt+Tab between two windows.
 
-**Browse your tabs** — Hold `Ctrl+Tab` for a moment and a visual overlay appears showing all your open tabs in MRU order. Each tab shows a screenshot preview (or a styled favicon card), the page title, and the domain.
+**Browse your tabs:** Hold `Ctrl+Tab` for a moment and a visual overlay appears showing your open tabs in MRU order. Each tab shows a screenshot preview (or a styled favicon card), the page title, and the domain.
 
-**Navigate and select** — While holding Ctrl, use arrow keys (← → ↑ ↓) or keep tapping Tab to move through the list. Release Ctrl to switch to the highlighted tab. Press Escape to cancel.
+**Navigate and select:** While holding Ctrl, use arrow keys (← → ↑ ↓) or keep tapping Tab to move through the list. Release Ctrl to switch to the highlighted tab. Press Escape to cancel.
 
 ---
 
 ## Features
 
-- **MRU tab ordering** — Tabs sorted by most recently used, not by position
-- **Quick toggle** — Fast Ctrl+Tab instantly switches between your two most recent tabs
-- **Visual overlay** — Horizontal card strip with tab screenshots, favicons, titles, and URLs
-- **Hybrid previews** — Real page screenshots when available, styled favicon cards with unique colors as fallback
-- **Keyboard navigation** — Arrow keys, Tab/Shift+Tab, Enter, Escape
-- **Mouse support** — Hover to highlight, click to switch
-- **Lightweight** — No external dependencies, no data collection, everything stays local
+- **MRU tab ordering:** Tabs sorted by most recently used, not by position
+- **Quick toggle:** A fast Ctrl+Tab instantly switches between your two most recent tabs, including on `chrome://` pages
+- **Visual overlay:** Horizontal card strip with tab screenshots, favicons, titles, and URLs
+- **Hybrid previews:** Real page screenshots when available, styled favicon cards with unique colors as fallback
+- **Keyboard navigation:** Arrow keys, Tab/Shift+Tab, Enter, Escape
+- **Mouse support:** Move the mouse to highlight, click to switch
+- **Works in web editors:** Handles focus inside embedded editors such as Google Docs and Gmail compose
+- **Lightweight:** No external dependencies, no data collection, everything stays local
 
 ---
 
 ## Installation
 
+### From the Chrome Web Store
+
+Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/arc-style-tab-switcher/bdfjigibgpkjgmpmgccdkkmigbdcpacl). The default shortcut is `Alt+T` (Option+T on Mac).
+
 ### From source
 
-1. Clone this repo or download the ZIP
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/arc-tab-switcher.git
-   ```
+1. Download this repo (green **Code** button → **Download ZIP**) and unzip it somewhere permanent, such as Documents. Chrome runs the extension from this folder, so don't delete or move it afterward.
 2. Open Chrome → go to `chrome://extensions/`
-3. Enable **Developer mode** (toggle in top right)
-4. Click **Load unpacked** → select the `arc-tab-switcher` folder
-5. Done! The default shortcut is `Alt+T`
+3. Turn on **Developer mode** (toggle in top right)
+4. If you have the Web Store version installed, turn it off
+5. Click **Load unpacked** → select the folder that contains `manifest.json`
+6. Accept the permission prompt
+7. Go to `chrome://extensions/shortcuts` and confirm the shortcut is `Alt+T` (Option+T on Mac)
 
 ### Set up Ctrl+Tab (recommended)
 
-Chrome reserves `Ctrl+Tab` and won't let extensions use it. To get the real Ctrl+Tab experience, you need a lightweight OS-level key remap that only applies to Chrome.
+Chrome reserves `Ctrl+Tab` and won't let extensions use it. To get the real Ctrl+Tab experience, add a lightweight OS-level key remap that only applies to Chrome.
 
 #### macOS (Karabiner-Elements)
 
 1. Install [Karabiner-Elements](https://karabiner-elements.pqrs.org/)
-2. Grant Input Monitoring permissions in System Settings → Privacy & Security
+2. Grant Input Monitoring permission in System Settings → Privacy & Security
 3. Open Terminal and run:
    ```bash
    mkdir -p ~/.config/karabiner/assets/complex_modifications
@@ -117,7 +122,7 @@ Chrome reserves `Ctrl+Tab` and won't let extensions use it. To get the real Ctrl
    }
    EOF
    ```
-5. Open Karabiner-Elements → Complex Modifications → Add predefined rule → Enable both rules
+5. Open Karabiner-Elements → Complex Modifications → Add predefined rule → enable both rules
 
 #### Windows (AutoHotkey)
 
@@ -133,7 +138,7 @@ Chrome reserves `Ctrl+Tab` and won't let extensions use it. To get the real Ctrl
    ^Right::!Right
    #HotIf
    ```
-3. Run the script (optionally add to startup)
+3. Run the script (optionally add it to startup)
 
 ---
 
@@ -153,9 +158,9 @@ Chrome reserves `Ctrl+Tab` and won't let extensions use it. To get the real Ctrl
 
 ## How Thumbnails Work
 
-The extension captures a screenshot each time you switch to a tab. Thumbnails build up as you browse — tabs you haven't visited since installing will show a styled favicon card with a unique color based on the domain until you visit them.
+The extension captures a small screenshot each time you switch to a tab. Thumbnails build up as you browse. Tabs you haven't visited since starting Chrome show a styled favicon card with a unique color based on the domain until you visit them.
 
-Screenshots cannot be captured for `chrome://` internal pages, which will always show the favicon fallback.
+Screenshots can't be captured for `chrome://` internal pages, which always show the favicon card.
 
 ---
 
@@ -166,7 +171,7 @@ This extension collects **zero data**. Everything stays local in your browser's 
 - Tab titles, URLs, and favicons are read to display the overlay
 - Screenshots are captured locally for thumbnail previews
 - Tab activation order is tracked for MRU sorting
-- **Nothing is ever transmitted, stored on disk, or shared with anyone**
+- **Nothing is ever transmitted, written to disk, or shared with anyone.** All data is cleared when Chrome quits.
 
 See the full [Privacy Policy](https://www.notion.so/Privacy-Policy-Arc-Style-Tab-Switcher-30318e68c3e58096ae27f5f418afc3cd?source=copy_link).
 
@@ -176,21 +181,21 @@ See the full [Privacy Policy](https://www.notion.so/Privacy-Policy-Arc-Style-Tab
 
 | Permission | Why |
 |---|---|
-| `tabs` | Read tab metadata and switch active tabs |
-| `activeTab` | Inject overlay UI into the current tab |
-| `scripting` | Programmatically inject overlay code and styles |
-| `favicon` | Display website favicons in the overlay |
+| `tabs` | Read tab titles, URLs, and favicons, and switch the active tab |
+| `scripting` | Load the switcher into tabs that were already open when the extension was installed or updated |
+| `storage` | Keep tab order and thumbnails in memory while Chrome briefly pauses the extension (cleared when Chrome quits) |
+| Access to all sites | Run a small listener on each page so a quick Ctrl+Tab is detected reliably, display the overlay, and capture thumbnail screenshots |
 
 ---
 
 ## Known Limitations
 
-- Cannot inject the overlay on `chrome://` pages (extensions, settings, new tab page)
-- Thumbnails only exist for tabs visited after installation
+- The overlay can't appear on `chrome://` pages or the Chrome Web Store (quick toggle still works there)
+- Thumbnails only exist for tabs visited since Chrome was started
 - Requires Karabiner (Mac) or AutoHotkey (Windows) for the actual `Ctrl+Tab` binding
 
 ---
 
 ## License
 
-MIT — do whatever you want with it.
+MIT. Do whatever you want with it.
